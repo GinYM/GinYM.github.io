@@ -82,7 +82,8 @@ featured-condition-size: 1              # A tag will be featured if the size of 
 chrome-tab-theme-color: "#000000"
 service-worker: true
 
-
+gems: [jekyll-paginate]
+timezone: CN
 
 # Friends
 #friends: [

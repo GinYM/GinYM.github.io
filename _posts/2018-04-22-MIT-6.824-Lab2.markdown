@@ -1,0 +1,124 @@
+---
+layout:       post
+title:        "6.824 Lab2 Raft"
+subtitle:     "Implement Raft"
+date:         2018-04-22 20:30:00 +0800
+author:       "Yiming"
+header-img:   ""
+header-mask:  0.3
+catalog:      true
+tags:
+    - 6.824
+    - Go
+    - Distributed System
+    - Raft
+---
+
+
+## Raft
+
+In this lab, we will implement [Raft](https://pdos.csail.mit.edu/6.824/papers/raft-extended.pdf), a replicated state machine protocal. A replicated service fault tolerance by storing complete copies of its state on multple replica servers. Stick to the details of Figure 2 in that [paper](https://pdos.csail.mit.edu/6.824/papers/raft-extended.pdf) can pass most of the cases. This [guide](https://thesquareplanet.com/blog/students-guide-to-raft/) written by TA in MIT illustrates some important details which will be ignored while implementing the Raft. It can save us most of time to debug.
+
+## State
+
+Each raft structure contains the following items.
+
+- currentTerm: Latest term the server has seen.
+- votedFor: candidateId that reveived voted from current Raft object.
+- log[]: log entries: contains command and corresponding term
+- commitIndex: index of highest log entry known to be commited
+- lastApplied: index of highest log entry applied to state machine
+- nextIndex[]: fro each server, index of the next log entry to send to that server
+- matchIndex[]: index of highest log entry known to be replicated on server.
+
+In most case, `nextIndex = matchIndex + 1`, nextIndex decides which index will be sent to that server, matchINdex is used to count how many servers leader have replicated the state.
+
+## AppendEntries RPC
+
+Leader will send RPC periodically to follower and candidate. Heartbeat is the same as normal RPC except that the entries is empty.
+
+**Arguments**:
+
+- term: leader's term
+- leadrId: leader's id
+- prevLogIndex: nextIndex[i]-1, index of log entry preceding the one that will be sent to that server
+- prevLogTerm: term of prevLogIndex entry
+- entries[]: log entries sent to store in the server (empty for heartbeat)
+- leaderCommit: leader's commitIndex
+
+**Replys**:
+
+- term: server's currentTerm
+- success: true if follower contained entry matching prevLogIndex and prevLogTerm
+- Index: used to determine the nextIndex of the server if the term conflicts.
+
+**Receiver Implementation**
+
+1. Reply false if leader's term < server's currentTerm. After receiving the reply, leader will become follower.
+2. Reply false if log doesn't contain an entry at prevLogIndex whose term matches prevLogTerm. move the preLogIndex back and pass all the command with the same term of prevLogTerm. Reply index of that index. Doing so will accelerate the log replication's speed.
+3. Deleting the index [prevLogIndex+1:], and append the entries from leader to the server's log. After steps 2, we can guarantee that the term in prevLogIndex and preceding it is the same as leader.
+4. If leaderCommit > commitIndex, set commitIndex = min(leaderCommit, len(server's log)), send a channel to the server claiming that new logs are ready to be applied to state machine.
+6. Send heartbeat channel to the follower and candidate to reset election time.
+
+Sending heartbeat after checking the log consistency is extremely import. If a server receive a heartbeat from a leader, then it knows that the log prceding nextIndex[] between lears and followers are consistent. In next RPC contaings logs will correctly appending the the logs. Besides, if a candidate receive a heartbeat from a out-dated lear, it should not accept and refresh the election time.
+
+## RequestVote RPC
+
+Candidate will send RequestVote RPC to gain vote from a majority and become a leader.
+
+**Arguments**:
+
+- term: candidate's term
+- candidateId: candidate requesting vote
+- lastLogIndex: index of candidate's last log entry
+- lastLogTerm: term of candidate's last log entry
+
+The last two paremeters are used to determ the consistency between follower and candidate. LastLogIndex = len(log)-1. It is not related to commitIndex
+
+**Replies**
+
+- term: follower's currentTerm
+- voteGranted: true means candidate received vote
+
+**Receiver Implementation**
+
+1. Reply false if candidate's term < server's currentTerm, candidate will become follower.
+2. If votedFor is null or candidateId, and candidate's log is at least as up-to-date as receiver's log, then grant vote. If `rf.logs[lastLogIndex].term < lastLogTerm || (rf.logs[lastLogIndex].term == lastLogTerm) && lastLogIndex > len(log)-1` Then we say candidate's log is at least as up-to-date as receiver's log.
+
+## Rules for Servers
+
+**All Servers**
+
+- If commitIndexn> lastApplied: increment lastApplied, apply log[lastApplied] to state machine. For leader, we shuld check its log every heartbeart period. For other server, it's implemented in AppendEntries RPC by channel.
+- If RPC request or respnse contains term T > currentTerm: set currentTerm = T, conver to follower. Only the latest term can be leader.
+
+**Followrs**
+
+- Respond to RPCs from candidates and leaders. Here we just receive heartbeat channel to reset the election time out. Such channel is sent out in Append RPC
+- If election timeout elapses without receiving AppendENtries RPC from current leader or granting vote to candidate: conver to candidate. Time is set to 150-300
+
+**Candidates**
+
+- On conversion to candidate, start election:
+  - Increment currentTerm
+  - Vote for self
+  - Reset election timer
+  - Send RequestVote RPC to all other servers
+- If votes received from majority of servers: become leader
+- If AppendENtries RPC received from new leader: conver to follower (useless?)
+- If election timeout elapses: start new election
+
+**Leaders**
+
+- Upon election: send heartbeat to each server; repeat to prevent timeout (useless?)
+- If command received from client: append entry to local log, respond after entry applied to state machine
+- Periodically sending RPC to all servers with log entries starting at nextIndex, if nextIndex == len(log), then it becomes a heartbeat.
+  - If successfu: update nextIndex and matchIndex for follower
+  - If fails because of log inconsistency: update the nextIndex to reply.index. It may also fails because of out-date of term, it should conver into follower.
+- If there exists an N such that N > commitIndex, a majority of matchIndex[i] >= N and log[N].term == currentTerm: set commitIndex=N and wake up the channel to applies log entris to state machine. Leader only update the term for its currentTerm, not the out-date term.
+
+
+## Finally
+
+Passing all the cases realy need our understanding of every details in that paper. For some cases not illustrates clearly in the Raft paper, we can refer to the guid for more information.
+
