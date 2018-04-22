@@ -1,6 +1,6 @@
 # Site settings
 title: Yiming's Blog
-SEOTitle: 金熠明的博客 | Yiming Blog
+SEOTitle: Yiming's Blog
 header-img: img/home-bg.jpg
 email: jinyiming1996@gmail.com
 description: "SJTU -> UCSD CSer"
@@ -68,7 +68,7 @@ ga_domain: jinyiming.me
 # Sidebar settings
 sidebar: true                           # whether or not using Sidebar.
 sidebar-about-description: "逃离AI坑"
-sidebar-avatar: /img/gin.jpg      # use absolute URL, seeing it's used in both `/` and `/about/`
+sidebar-avatar: /img/gin.png      # use absolute URL, seeing it's used in both `/` and `/about/`
 
 
 
