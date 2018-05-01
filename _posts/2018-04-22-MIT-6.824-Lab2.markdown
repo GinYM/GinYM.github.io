@@ -118,6 +118,11 @@ The last two paremeters are used to determ the consistency between follower and 
 - If there exists an N such that N > commitIndex, a majority of matchIndex[i] >= N and log[N].term == currentTerm: set commitIndex=N and wake up the channel to applies log entris to state machine. Leader only update the term for its currentTerm, not the out-date term.
 
 
+## Optimization
+
+For AppendEntriesRPC, add a variable `InconIdx` for reply arguments. If term mismatch, decrease all idx for the same term and store it to `InconIdx`
+
+
 ## Finally
 
 Passing all the cases realy need our understanding of every details in that paper. For some cases not illustrates clearly in the Raft paper, we can refer to the guid for more information.
