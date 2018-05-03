@@ -122,6 +122,10 @@ The last two paremeters are used to determ the consistency between follower and 
 
 For AppendEntriesRPC, add a variable `InconIdx` for reply arguments. If term mismatch, decrease all idx for the same term and store it to `InconIdx`
 
+## Fix Bug
+
+In figure 2, for laders to update nextIndex and matchIndex. `matchIndex = args.prevLogIndex + len(args.entres)`
+
 
 ## Finally
 
