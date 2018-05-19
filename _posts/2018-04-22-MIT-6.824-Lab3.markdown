@@ -1,0 +1,114 @@
+---
+layout:       post
+title:        "6.824 Lab3 Fault-tolerant Key/Value Service"
+subtitle:     "Implement Raft"
+date:         2018-05-17 20:30:00 +0800
+author:       "Yiming"
+header-img:   ""
+header-mask:  0.3
+catalog:      true
+tags:
+    - 6.824
+    - Go
+    - Distributed System
+    - Raft
+---
+
+
+## Introduction
+
+在lab2的基础上实现fault-tolerant 的key/value 存储服务。有三种操作`Put(key, value), Apped(key, arg), Get(key)`。`put`在数据库中替换原有的key，`append`追加键值对，`get`提取出对应键的值。客户端与服务器通过`clert`通信。`clert`使用rpc与服务器交互。
+
+## Part A：Key/value service without log compaction
+
+每一个kvservers都有对应的raft。clert发送给raft中的leader。kvserver向raft中提交增加查询的操作，因此raft的日志中会存在这些操作。所有的kvserver按顺序执行从raft中返回的结果，并且将这些操作应用与kvserver自己的数据库中。这样kvserver就有相同的数据库。
+
+Clerk不知道哪个kvserver是raft中的leader。如果claert发送的rpc给错误的kvserver，或者根本无法发送(网络原因)，那么clert将会尝试给不同的kvserver发送。如果kvsrver已经收到raft的提交，即命令在raft中大部分的log已经复制该命令，那么server将会给client返回结果。如果raft中提交失败，这server给client通过rpc返回错误信息。
+
+###clint实现
+
+Clerk 结构体
+
+```
+type Clerk struct {
+	servers []*labrpc.ClientEnd
+	// You will have to modify this struct.
+	commandId int
+	clientId int64
+	lastLeader int
+}
+```
+
+其中`lastleader`用于记录最近找到的leaderid，client发送rpc时首先从`lastleader`开始自增。
+
+`commandId`为每一条命令的下标，`clientid`为client的唯一id，使用随机数生成。这两个id构成每一条命令的唯一id，防止重复id提交。
+
+`Put`, `Get`,`Append`命令：从lastleader开始，发送对应命令的rpc，如果返回错误，则自增server的id，直到返回为正确。
+
+### server实现
+
+操作的结构体
+
+```
+type Op struct {
+	// Your definitions here.
+	// Field names must start with capital letters,
+	// otherwise RPC will break.
+	Operation string //"Put" or "Append" or "Get"
+	Key string
+	Value string
+	Id int
+	ClientId int64
+}
+```
+
+`Operation`为操作的三种命令，Key，Value为键值，Id，clientId对应Clerk。
+
+键值服务结构体
+
+```
+type KVServer struct {
+	mu      sync.Mutex
+	me      int
+	rf      *raft.Raft
+	applyCh chan raft.ApplyMsg
+
+	maxraftstate int // snapshot if log grows this big
+
+	// Your definitions here.
+	store map[string]string   // store key value
+	latestId map[int64]int    // id for each client
+	commands map[int]Op       // operation
+	//commitPutAppend chan bool
+	//commitGet chan string
+	commits map[int]chan bool
+	//isKilled chan bool
+}
+```
+
+applyCh用于从raft接受提交信息。store为键值数据库。latestId为每一个client最新的command id，用于去重。commands与raft中log对应。commits为是否提交的channel。对于每一个命令，先使用raft中的start在raft中复制命令，如果大多数节点都已复制，则applyCh会有输出，最后通过commits通知对应命令该命令已经提交，可以更新数据库。
+
+server中`APply`处理从raft传递的提交信息，
+
+ApplyMsg结构体
+
+```
+type ApplyMsg struct {
+	CommandValid bool
+	Command      interface{}
+	CommandIndex int
+	SnapshotData []byte
+	//UseSnapshot bool
+
+}
+```
+
+其中CommandValid代表是否snapshot命令。Command为命令，CommandINdex代表在raft log中的下标。SnapshotData为保存的快照信息。将msg中的命令保存在`kv.commands`中。判断一个命令是否存在使用commandId与serverId，如果commandId比对应的serverId中最新的commandId下标小，我们认为该命令已经存在。如果不存在则在数据库中做对应的处理，处理完后发送commit。对于put，get，如果发送的命命令超时后没有收到commit，则返回错误。
+
+## Part B: Key/value service with log compaction
+
+随着程序运行，raft中log会越来越大，因此需要使用快照压缩已经提交的log。对于kvserver中的服务器，如果快照中的大小超过限制，则发送leadr发送snapshot的rpc。使用raft gob对数据进行编码与解码。
+
+kvserver中检查对应raft中保存的log大小，如果超过某一阈值，则发送安装快照的rpc。server如果收到rpc返回，则更新数据库。
+
+安装快照的rpc参数包含当前任期，leader下标，最近一次命令的下标与对应任期，数据库。server收到rpc后首先检查任期与最近一次的命令下标，如果不比自己的数据新，那么就拒绝该快照，否则保存快照，移除旧的日志，发送channel，返回给kvserver快照更新的信息。对raft日志做特殊处理，下标为0的入口包含了快照信息(任期，真实下标)，其余的入口多了命令。rpc发送的下标都是真实下标，与入口为0的下标相减可以得到log中的下标。移除旧的日志即只保存lastIndex开始的往后的日志。更新lastAPply与commitIndex为lastInde，由于已经发送了快照说明lastIndex之前的信息已经被服务器数据库保存。如果lastindex小于lastApply，在服务断接受rpc返回的信息时检查该命令有没有存在，不存在才更新数据库。
