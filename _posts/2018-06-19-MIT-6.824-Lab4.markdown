@@ -1,0 +1,71 @@
+---
+layout:       post
+title:        "6.824 Lab4 Lab 4: Sharded Key/Value Service"
+subtitle:     "Implement Raft"
+date:         2018-06-19 20:30:00 +0800
+author:       "Yiming"
+header-img:   ""
+header-mask:  0.3
+catalog:      true
+tags:
+    - 6.824
+    - Go
+    - Distributed System
+    - Raft
+---
+
+
+## Introduction
+
+在该project中需要构建分片的键值存储系统。一个分片是有共同特征的键，如将键模分片数。该系统由两个部分组成，一部分是多个集群复制分片数据。另一部分是shard master，用于决定哪一个分片用于服务哪一个键，成为配置(configuration)。Configuration会随时间变化而变化。客户端请求shard master寻找某一个键的复制集群，复制集群根据master找到分片对应的server。整个系统只有一个shard master。
+
+分片存储系统需要能够在不同分片的复制集群中转移数据。其中一个原因是一些集群可能会比其他集群更加拥挤(more loaded)，因此需要移动数据从而保证负载均衡。即每一群复制集群处理的分片数量应该均衡。另外一个原因是replica group可能加入或者离开系统：新加入的组为了提高荣祥，或者已经存在的组需要下线维护。
+
+主要的挑战是重新配置的过程(reconfiguration)，改变分片分配的集群。
+
+## Part A: The Shard Master
+
+该部分需要实现shard master。包含四中操作`Join, Leave, Move, Query` 的RPC。
+
+`Join`用于新增replica group。参数是从replica group identifiers(GID)到服务器名称的映射。shardmaster需要新建一个配置，包含新增的replica group。新的配置需要负载均衡，将GID平均分配到不同shard中。如3个gid，10个分片，可以为[1,1,1,2,2,2,3,3,3,3]。
+
+`Leave`参数是之前加入group的GID数组。分片需要新建一个配置，该配置不包含数组中的GID，然后将剩余的分片分配给剩余的GID，同时保证负载均衡，如[1,1,1,2,2,2,3,3,3,3]删除3之后配置可以为[1,1,1,2,2,2,1,1,2,2,]。需要竟可能减少分片的移动。
+
+Client实现需要请求服务器中的leader，使用RPC实现。
+
+Server实现，
+
+```
+type ShardMaster struct {
+	mu      sync.Mutex
+	me      int
+	rf      *raft.Raft
+	applyCh chan raft.ApplyMsg
+
+	// Your data here.
+	configs []Config // indexed by config num
+	latestId map[int64]int    // id for each client
+	commands map[int]Op       // operation
+	commits map[int]chan bool
+	configIdx int
+	isKilled chan bool
+}
+```
+
+每一次reconfigure都会有一个不同的configNum，并且将历史配置信息存在configs中。
+```
+type Config struct {
+	Num    int              // config number
+	Shards [NShards]int     // shard -> gid
+	Groups map[int][]string // gid -> servers[]
+}
+```
+一个Config结构体包含了configNum，Shards存储了每一个分片对应的GID， Groups存储了每个GID对应的服务器名称。
+
+对于`Join`操作，首先需要将新增的GID与服务器信息添加到`Groups`中。接下来计算出每一个GID需要处理多少分片`NShards/num`。首先计算出每一个GID所分配的分片数量，同时比较Shards中gid与Groups中GID的差异，得到已经被删除的gid，存储其对应Shards位置信息，以供重新分配shard时使用。
+
+接下来对每一个GID计算需要分配的分片数量，`NShards/num`或者`NShards/num+1`。根据之前计算出的已经分配的数量，首先删除多余的分片，加入`storeEmpty`中，接下来对于分配不足的GID，从`storeEmpty`中取出并且设置。
+
+`Leave`同理。
+
+## Part B: Sharded Key/Value Server
