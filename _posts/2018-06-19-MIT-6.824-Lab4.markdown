@@ -69,3 +69,10 @@ type Config struct {
 `Leave`同理。
 
 ## Part B: Sharded Key/Value Server
+接下来会构建一个分片，容错的键值存储系统。每一个服务器只处理一部分数据(根据Key分片)。
+
+对于client的实现，对于每一个key，首先需要根据key计算出对应的shard，再根据配置信息config中的Shards得到该shard由哪个GID处理，接着通过Groups找到服务器通过RPC调用函数。config通过shardMaster得到最新配置信息，同时会有configNum，根绝该值保持与数据库之间的一致性。
+
+Server端主要在Reconfigure上。每次请求shardMaster发现configNum更改之后需要进行reconfigure。对于每一个分片，当配置信息改变之后需要从原来GID中获取该分片对应是数据，保存一份本地副本。接着通过广播通知其余服务器，我现在已经获取了数据，可以进行更新数据库了。接下来检查是否收到来自其他GID的信息，倘若都受到表明可以进行更新。更新数据库并且更新configNum。
+
+对于每一次的put append操作都需要比较configNum，如果不同则无法更新。
